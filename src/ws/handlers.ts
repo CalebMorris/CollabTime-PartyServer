@@ -13,6 +13,8 @@ import {
   canTransitionToWaiting,
   transitionToActive,
   transitionToWaiting,
+  checkLockIn,
+  lockIn,
 } from '../services/room.service.js';
 import { parseClientMessage } from '../utils/validation.js';
 import { RateLimitService } from '../services/ratelimit.service.js';
@@ -154,6 +156,45 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
     socket.close();
   }
 
+  function handlePropose(socket: WebSocket, epochMs: number): void {
+    const meta = registry.getMeta(socket);
+    if (!meta) return;
+
+    const room = store.getRoom(meta.roomCode);
+    if (!room) {
+      sendTo(socket, { type: 'error', code: ErrorCode.ROOM_NOT_FOUND, message: 'Room not found' });
+      return;
+    }
+
+    if (room.state === 'locked_in') {
+      sendTo(socket, { type: 'error', code: ErrorCode.ROOM_NOT_FOUND, message: 'Room not found' });
+      return;
+    }
+
+    if (room.state !== 'active') {
+      sendTo(socket, { type: 'error', code: ErrorCode.ROOM_NOT_ACTIVE, message: 'Room is not active' });
+      return;
+    }
+
+    const participant = room.participants.get(meta.participantToken);
+    if (!participant) return;
+
+    participant.proposalEpochMs = epochMs;
+    room.lastActivityMs = Date.now();
+
+    broadcastToRoom(meta.roomCode, {
+      type: 'proposal_updated',
+      participantToken: meta.participantToken,
+      epochMs,
+    });
+
+    const lockedEpoch = checkLockIn(room);
+    if (lockedEpoch !== null) {
+      lockIn(room, lockedEpoch);
+      broadcastToRoom(meta.roomCode, { type: 'locked_in', epochMs: lockedEpoch });
+    }
+  }
+
   function handleDisconnect(socket: WebSocket): void {
     // Called when socket closes without explicit leave
     const meta = registry.getMeta(socket);
@@ -180,8 +221,7 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
         sendTo(socket, { type: 'error', code: ErrorCode.REJOIN_FAILED, message: 'Rejoin not yet implemented' });
         break;
       case 'propose':
-        // Placeholder — implemented in Phase 2
-        sendTo(socket, { type: 'error', code: ErrorCode.ROOM_NOT_ACTIVE, message: 'Proposals not yet implemented' });
+        handlePropose(socket, msg.epochMs);
         break;
       case 'leave':
         handleLeave(socket);
