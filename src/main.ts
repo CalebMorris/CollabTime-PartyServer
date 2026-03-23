@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
+import cors from '@fastify/cors';
 import { loadConfig } from './config/index.js';
 import { initWordlist } from './services/wordlist.service.js';
 import { InMemoryStore } from './store/memory.js';
@@ -12,17 +13,20 @@ import WebSocket from 'ws';
 const config = loadConfig();
 initWordlist();
 
+let isShuttingDown = false;
+
+const fastify = Fastify({ logger: { level: config.LOG_LEVEL } });
+
 const store = new InMemoryStore({
   gcIntervalMs: config.GC_INTERVAL_MS,
   roomTtlMs: config.ROOM_TTL_MS,
   onRoomExpired: (roomCode, room) => {
-    // Broadcast room_expired to all connected sockets and close them
+    fastify.log.info({ roomCode }, 'room_expired');
     broadcastToRoom(roomCode, { type: 'room_expired' });
     const sockets = registry.cleanupRoom(roomCode);
     for (const socket of sockets) {
       socket.close();
     }
-    // Clean up participant indexes
     for (const participantToken of room.participants.keys()) {
       store.deleteParticipantIndex(participantToken);
     }
@@ -35,16 +39,30 @@ const rateLimiter = new RateLimitService({
   backoffAfter: config.RATE_LIMIT_BACKOFF_AFTER,
 });
 
-const handlers = createHandlers(store, config, rateLimiter);
+const handlers = createHandlers(store, config, rateLimiter, {
+  info: (msg, data) => fastify.log.info(data ?? {}, msg),
+  warn: (msg, data) => fastify.log.warn(data ?? {}, msg),
+  error: (msg, data) => fastify.log.error(data ?? {}, msg),
+});
 
-const fastify = Fastify({
-  logger: { level: config.LOG_LEVEL },
-  maxParamLength: 100,
+// CORS
+await fastify.register(cors, {
+  origin: config.NODE_ENV === 'development'
+    ? '*'
+    : (config.CORS_ORIGIN ?? false),
+  methods: ['GET'],
 });
 
 await fastify.register(websocket);
 
 fastify.get('/health', async () => ({ status: 'ok' }));
+
+fastify.get('/ready', async (_req, reply) => {
+  if (isShuttingDown) {
+    return reply.code(503).send({ status: 'shutting_down' });
+  }
+  return { status: 'ok' };
+});
 
 fastify.register(async function (fastify) {
   fastify.get('/ws', { websocket: true }, (socket, req) => {
@@ -67,8 +85,10 @@ fastify.register(async function (fastify) {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   fastify.log.info('SIGTERM received, shutting down');
+  isShuttingDown = true;
   store.stop();
   for (const [roomCode, room] of store.getAllRooms()) {
+    fastify.log.info({ roomCode }, 'room_expired_on_shutdown');
     broadcastToRoom(roomCode, { type: 'room_expired' });
     const sockets = registry.cleanupRoom(roomCode);
     for (const socket of sockets) {

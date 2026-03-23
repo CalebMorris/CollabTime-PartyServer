@@ -19,10 +19,16 @@ import {
 import { parseClientMessage } from '../utils/validation.js';
 import { RateLimitService } from '../services/ratelimit.service.js';
 import type { RoomSnapshot, ParticipantSnapshot } from '../models/messages.js';
-import { PROTOCOL_VERSION } from '../config/constants.js';
+import { PROTOCOL_VERSION, isCompatibleVersion } from '../config/constants.js';
 
 // Suppress unused import warning — ProtocolError is available for future use
 void ProtocolError;
+
+export interface Logger {
+  info(msg: string, data?: Record<string, unknown>): void;
+  warn(msg: string, data?: Record<string, unknown>): void;
+  error(msg: string, data?: Record<string, unknown>): void;
+}
 
 function buildRoomSnapshot(room: Room): RoomSnapshot {
   const participants: ParticipantSnapshot[] = [...room.participants.values()].map(p => ({
@@ -39,7 +45,7 @@ function buildRoomSnapshot(room: Room): RoomSnapshot {
   };
 }
 
-export function createHandlers(store: Store, config: Config, rateLimiter: RateLimitService) {
+export function createHandlers(store: Store, config: Config, rateLimiter: RateLimitService, logger?: Logger) {
   const heartbeatOptions = {
     pingMs: config.HEARTBEAT_PING_MS,
     pongTimeoutMs: config.HEARTBEAT_PONG_TIMEOUT_MS,
@@ -59,7 +65,12 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
     room.lastActivityMs = Date.now();
   }
 
-  function handleJoin(socket: WebSocket, roomCode: string, ip: string): void {
+  function handleJoin(socket: WebSocket, roomCode: string, ip: string, clientVersion?: string): void {
+    if (!isCompatibleVersion(clientVersion)) {
+      sendTo(socket, { type: 'error', code: ErrorCode.INVALID_TOKEN, message: `Incompatible protocol version: ${clientVersion}` });
+      return;
+    }
+
     if (rateLimiter.isRateLimited(ip)) {
       sendTo(socket, { type: 'error', code: ErrorCode.RATE_LIMITED, message: 'Too many failed attempts' });
       return;
@@ -129,6 +140,8 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
       room: buildRoomSnapshot(room),
     });
 
+    logger?.info('participant_joined', { roomCode, participantToken, roomState: room.state });
+
     startHeartbeat(socket, store, heartbeatOptions, onGraceExpired);
   }
 
@@ -152,11 +165,16 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
       broadcastToRoom(meta.roomCode, { type: 'room_deactivated' });
     }
     room.lastActivityMs = Date.now();
+    logger?.info('participant_left', { roomCode: meta.roomCode, participantToken: meta.participantToken });
 
     socket.close();
   }
 
-  function handleRejoin(socket: WebSocket, roomCode: string, sessionToken: string): void {
+  function handleRejoin(socket: WebSocket, roomCode: string, sessionToken: string, clientVersion?: string): void {
+    if (!isCompatibleVersion(clientVersion)) {
+      sendTo(socket, { type: 'error', code: ErrorCode.INVALID_TOKEN, message: `Incompatible protocol version: ${clientVersion}` });
+      return;
+    }
     const entry = store.getGracePeriodEntry(sessionToken);
     if (!entry || entry.roomCode !== roomCode) {
       sendTo(socket, { type: 'error', code: ErrorCode.REJOIN_FAILED, message: 'Rejoin failed' });
@@ -213,6 +231,8 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
       room: buildRoomSnapshot(room),
     });
 
+    logger?.info('participant_rejoined', { roomCode, participantToken: entry.participantToken });
+
     startHeartbeat(socket, store, heartbeatOptions, onGraceExpired);
   }
 
@@ -252,6 +272,7 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
     if (lockedEpoch !== null) {
       lockIn(room, lockedEpoch);
       broadcastToRoom(meta.roomCode, { type: 'locked_in', epochMs: lockedEpoch });
+      logger?.info('room_locked_in', { roomCode: meta.roomCode });
     }
   }
 
@@ -274,10 +295,10 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
 
     switch (msg.type) {
       case 'join':
-        handleJoin(socket, msg.roomCode, ip);
+        handleJoin(socket, msg.roomCode, ip, msg.protocolVersion);
         break;
       case 'rejoin':
-        handleRejoin(socket, msg.roomCode, msg.sessionToken);
+        handleRejoin(socket, msg.roomCode, msg.sessionToken, msg.protocolVersion);
         break;
       case 'propose':
         handlePropose(socket, msg.epochMs);

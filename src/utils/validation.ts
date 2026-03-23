@@ -4,12 +4,14 @@ import { ROOM_CODE_PATTERN, SESSION_TOKEN_PATTERN, EPOCH_MIN_MS, EPOCH_MAX_MS } 
 const joinSchema = z.object({
   type: z.literal('join'),
   roomCode: z.string().regex(ROOM_CODE_PATTERN),
+  protocolVersion: z.string().optional(),
 });
 
 const rejoinSchema = z.object({
   type: z.literal('rejoin'),
   roomCode: z.string().regex(ROOM_CODE_PATTERN),
   sessionToken: z.string().regex(SESSION_TOKEN_PATTERN),
+  protocolVersion: z.string().optional(),
 });
 
 const proposeSchema = z.object({
