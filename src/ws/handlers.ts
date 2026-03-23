@@ -156,6 +156,66 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
     socket.close();
   }
 
+  function handleRejoin(socket: WebSocket, roomCode: string, sessionToken: string): void {
+    const entry = store.getGracePeriodEntry(sessionToken);
+    if (!entry || entry.roomCode !== roomCode) {
+      sendTo(socket, { type: 'error', code: ErrorCode.REJOIN_FAILED, message: 'Rejoin failed' });
+      return;
+    }
+
+    cancelGracePeriod(sessionToken, store);
+
+    const room = store.getRoom(roomCode);
+    if (!room) {
+      sendTo(socket, { type: 'error', code: ErrorCode.REJOIN_FAILED, message: 'Rejoin failed' });
+      return;
+    }
+
+    const participant = room.participants.get(entry.participantToken);
+    if (!participant) {
+      sendTo(socket, { type: 'error', code: ErrorCode.REJOIN_FAILED, message: 'Rejoin failed' });
+      return;
+    }
+
+    participant.isConnected = true;
+    participant.sessionToken = sessionToken;
+    participant.lastHeartbeatMs = Date.now();
+    room.lastActivityMs = Date.now();
+
+    registry.registerSocket(socket, {
+      participantToken: entry.participantToken,
+      sessionToken,
+      roomCode,
+    });
+
+    broadcastToRoom(roomCode, {
+      type: 'participant_reconnected',
+      participantToken: entry.participantToken,
+    }, socket);
+
+    if (canTransitionToActive(room)) {
+      transitionToActive(room);
+      broadcastToRoom(roomCode, {
+        type: 'room_activated',
+        participants: [...room.participants.values()].map(p => ({
+          participantToken: p.participantToken,
+          nickname: p.nickname,
+        })),
+      }, socket);
+    }
+
+    sendTo(socket, {
+      type: 'joined',
+      sessionToken,
+      participantToken: entry.participantToken,
+      nickname: participant.nickname,
+      protocolVersion: PROTOCOL_VERSION,
+      room: buildRoomSnapshot(room),
+    });
+
+    startHeartbeat(socket, store, heartbeatOptions, onGraceExpired);
+  }
+
   function handlePropose(socket: WebSocket, epochMs: number): void {
     const meta = registry.getMeta(socket);
     if (!meta) return;
@@ -217,8 +277,7 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
         handleJoin(socket, msg.roomCode, ip);
         break;
       case 'rejoin':
-        // Placeholder — implemented in Phase 3
-        sendTo(socket, { type: 'error', code: ErrorCode.REJOIN_FAILED, message: 'Rejoin not yet implemented' });
+        handleRejoin(socket, msg.roomCode, msg.sessionToken);
         break;
       case 'propose':
         handlePropose(socket, msg.epochMs);

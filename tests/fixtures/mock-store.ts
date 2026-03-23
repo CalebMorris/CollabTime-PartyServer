@@ -42,6 +42,7 @@ export class MockStore implements Store {
     this.gracePeriodCache.delete(sessionToken);
   }
 
+  getAllRooms(): Map<string, Room> { return this.rooms; }
   stop(): void {
     // No-op for mock
   }

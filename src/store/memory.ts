@@ -63,5 +63,6 @@ export class InMemoryStore implements Store {
   deleteGracePeriodEntry(sessionToken: string): void {
     this.gracePeriodCache.delete(sessionToken);
   }
+  getAllRooms(): Map<string, Room> { return this.rooms; }
   stop(): void { clearInterval(this.gcTimer); }
 }

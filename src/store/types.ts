@@ -17,5 +17,6 @@ export interface Store {
   getGracePeriodEntry(sessionToken: string): GracePeriodEntry | undefined;
   setGracePeriodEntry(sessionToken: string, entry: GracePeriodEntry): void;
   deleteGracePeriodEntry(sessionToken: string): void;
+  getAllRooms(): Map<string, Room>;
   stop(): void;
 }

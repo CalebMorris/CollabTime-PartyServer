@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import WebSocket from 'ws';
@@ -6,6 +6,7 @@ import { InMemoryStore } from '../../src/store/memory.js';
 import { RateLimitService } from '../../src/services/ratelimit.service.js';
 import { createHandlers } from '../../src/ws/handlers.js';
 import { registry } from '../../src/ws/registry.js';
+import { broadcastToRoom } from '../../src/ws/broadcast.js';
 import { initWordlist } from '../../src/services/wordlist.service.js';
 import type { ServerMessage } from '../../src/models/messages.js';
 
@@ -371,5 +372,181 @@ describe('Phase 1 & 2 integration', () => {
     alice.close();
     bob.close();
     carol.close();
+  });
+});
+
+describe('Phase 3: resilience', () => {
+  let fastify: Awaited<ReturnType<typeof buildServer>>['fastify'];
+  let store: Awaited<ReturnType<typeof buildServer>>['store'];
+  let url: string;
+
+  beforeEach(async () => {
+    const result = await buildServer();
+    fastify = result.fastify;
+    store = result.store;
+    url = result.url;
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await fastify.close();
+  });
+
+  it('rejoin within grace period — same nickname and proposal intact', async () => {
+    const alice = await connect(url);
+    const bob = await connect(url);
+
+    send(alice, { type: 'join', roomCode: 'swift-crane-bay' });
+    const aliceJoined = await nextMessage(alice);
+    expect(aliceJoined.type).toBe('joined');
+    if (aliceJoined.type !== 'joined') return;
+
+    const { sessionToken, participantToken, nickname } = aliceJoined;
+
+    send(bob, { type: 'join', roomCode: 'swift-crane-bay' });
+    await nextMessage(alice); // room_activated
+    await nextMessage(bob);   // joined
+
+    // Alice proposes
+    send(alice, { type: 'propose', epochMs: 1_711_209_600_000 });
+    await nextMessage(alice); // proposal_updated
+    await nextMessage(bob);   // proposal_updated
+
+    // Simulate heartbeat timeout: mark disconnected, add grace entry, remove from registry
+    const room = store.getRoom('swift-crane-bay')!;
+    const participant = room.participants.get(participantToken)!;
+    participant.isConnected = false;
+    store.setGracePeriodEntry(sessionToken, {
+      roomCode: 'swift-crane-bay',
+      participantToken,
+      expiresAtMs: Date.now() + 30_000,
+      timer: setTimeout(() => {}, 30_000),
+    });
+    registry.cleanupSocket(alice as unknown as WebSocket);
+    alice.terminate();
+    // Note: no participant_disconnected broadcast — we bypassed the heartbeat to inject
+    // the grace entry directly; the heartbeat unit tests cover that flow.
+
+    // Alice reconnects
+    const aliceNew = await connect(url);
+    const bobReconnectedP = nextMessage(bob);
+    send(aliceNew, { type: 'rejoin', roomCode: 'swift-crane-bay', sessionToken });
+
+    const [rejoined, bobReconnected] = await Promise.all([
+      nextMessage(aliceNew),
+      bobReconnectedP,
+    ]);
+
+    expect(rejoined.type).toBe('joined');
+    if (rejoined.type === 'joined') {
+      expect(rejoined.nickname).toBe(nickname);
+      expect(rejoined.participantToken).toBe(participantToken);
+      expect(rejoined.room.state).toBe('active');
+      const aliceInSnapshot = rejoined.room.participants.find(p => p.participantToken === participantToken);
+      expect(aliceInSnapshot?.proposalEpochMs).toBe(1_711_209_600_000);
+    }
+    expect(bobReconnected.type).toBe('participant_reconnected');
+
+    aliceNew.close();
+    bob.close();
+  });
+
+  it('rejoin after grace period expires — REJOIN_FAILED', async () => {
+    const socket = await connect(url);
+    // No grace entry exists for this session token
+    send(socket, { type: 'rejoin', roomCode: 'dead-room-one', sessionToken: 'a'.repeat(32) });
+    const msg = await nextMessage(socket);
+    expect(msg.type).toBe('error');
+    if (msg.type === 'error') {
+      expect(msg.code).toBe('REJOIN_FAILED');
+    }
+    socket.close();
+  });
+
+  it('rejoin with wrong room code — REJOIN_FAILED', async () => {
+    const alice = await connect(url);
+    send(alice, { type: 'join', roomCode: 'real-room-abc' });
+    const joined = await nextMessage(alice);
+    expect(joined.type).toBe('joined');
+    if (joined.type !== 'joined') return;
+
+    const { sessionToken, participantToken } = joined;
+
+    // Add grace entry for correct room
+    store.setGracePeriodEntry(sessionToken, {
+      roomCode: 'real-room-abc',
+      participantToken,
+      expiresAtMs: Date.now() + 30_000,
+      timer: setTimeout(() => {}, 30_000),
+    });
+    alice.terminate();
+
+    const socket = await connect(url);
+    send(socket, { type: 'rejoin', roomCode: 'wrong-room-xyz', sessionToken });
+    const msg = await nextMessage(socket);
+    expect(msg.type).toBe('error');
+    if (msg.type === 'error') {
+      expect(msg.code).toBe('REJOIN_FAILED');
+    }
+    socket.close();
+  });
+
+  it('room expiry — GC fires room_expired broadcast and closes sockets', async () => {
+    // Build a dedicated server AFTER activating fake timers so the store's
+    // setInterval is captured by the fake timer system.
+    vi.useFakeTimers();
+
+    const expireStore = new InMemoryStore({
+      gcIntervalMs: 1_000,
+      roomTtlMs: 5_000,
+      onRoomExpired: (roomCode, room) => {
+        broadcastToRoom(roomCode, { type: 'room_expired' });
+        const sockets = registry.cleanupRoom(roomCode);
+        for (const s of sockets) s.close();
+        for (const pt of room.participants.keys()) expireStore.deleteParticipantIndex(pt);
+      },
+    });
+    const expireRateLimiter = new RateLimitService({
+      windowMs: 300_000,
+      maxAttempts: 10,
+      backoffAfter: 3,
+    });
+    const expireHandlers = createHandlers(expireStore, TEST_CONFIG, expireRateLimiter);
+
+    const expireFastify = Fastify({ logger: false });
+    await expireFastify.register(websocket);
+    expireFastify.register(async (f) => {
+      f.get('/ws', { websocket: true }, (socket, req) => {
+        const ip = req.ip;
+        socket.on('message', (data) => {
+          expireHandlers.handleMessage(socket as unknown as WebSocket, data.toString(), ip);
+        });
+        socket.on('close', () => {
+          expireHandlers.handleDisconnect(socket as unknown as WebSocket);
+        });
+      });
+    });
+    await expireFastify.listen({ port: 0, host: '127.0.0.1' });
+    const expireUrl = `ws://127.0.0.1:${(expireFastify.server.address() as { port: number }).port}/ws`;
+
+    const alice = await connect(expireUrl);
+    send(alice, { type: 'join', roomCode: 'aged-room-old' });
+    const joined = await nextMessage(alice);
+    expect(joined.type).toBe('joined');
+
+    const expiredP = nextMessage(alice);
+
+    // Set lastActivityMs far in the past so GC considers it expired
+    const room = expireStore.getRoom('aged-room-old')!;
+    room.lastActivityMs = Date.now() - 6_000; // 6s ago, TTL is 5s
+
+    // Advance fake timers past the GC interval (1s)
+    vi.advanceTimersByTime(1_001);
+
+    const expired = await expiredP;
+    expect(expired.type).toBe('room_expired');
+
+    await expireFastify.close();
+    expireStore.stop();
   });
 });

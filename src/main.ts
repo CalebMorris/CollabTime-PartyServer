@@ -68,6 +68,16 @@ fastify.register(async function (fastify) {
 process.on('SIGTERM', async () => {
   fastify.log.info('SIGTERM received, shutting down');
   store.stop();
+  for (const [roomCode, room] of store.getAllRooms()) {
+    broadcastToRoom(roomCode, { type: 'room_expired' });
+    const sockets = registry.cleanupRoom(roomCode);
+    for (const socket of sockets) {
+      socket.close();
+    }
+    for (const participantToken of room.participants.keys()) {
+      store.deleteParticipantIndex(participantToken);
+    }
+  }
   await fastify.close();
   process.exit(0);
 });
