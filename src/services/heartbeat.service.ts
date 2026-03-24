@@ -12,6 +12,7 @@ interface HeartbeatOptions {
 interface HeartbeatState {
   pingTimer: NodeJS.Timeout | null;
   pongTimer: NodeJS.Timeout | null;
+  pongHandler: (() => void) | null;
 }
 
 const heartbeatStates = new Map<WebSocket, HeartbeatState>();
@@ -24,7 +25,7 @@ export function startHeartbeat(
 ): void {
   stopHeartbeat(socket);
 
-  const state: HeartbeatState = { pingTimer: null, pongTimer: null };
+  const state: HeartbeatState = { pingTimer: null, pongTimer: null, pongHandler: null };
   heartbeatStates.set(socket, state);
 
   state.pingTimer = setTimeout(() => {
@@ -64,7 +65,7 @@ export function startHeartbeat(
     }, options.pongTimeoutMs);
   }, options.pingMs);
 
-  socket.on('pong', () => {
+  const pongHandler = () => {
     const s = heartbeatStates.get(socket);
     if (s?.pongTimer) {
       clearTimeout(s.pongTimer);
@@ -78,7 +79,9 @@ export function startHeartbeat(
     }
     // Restart heartbeat cycle
     startHeartbeat(socket, store, options, onGraceExpired);
-  });
+  };
+  state.pongHandler = pongHandler;
+  socket.on('pong', pongHandler);
 }
 
 export function stopHeartbeat(socket: WebSocket): void {
@@ -86,6 +89,7 @@ export function stopHeartbeat(socket: WebSocket): void {
   if (!state) return;
   if (state.pingTimer) clearTimeout(state.pingTimer);
   if (state.pongTimer) clearTimeout(state.pongTimer);
+  if (state.pongHandler) socket.removeListener('pong', state.pongHandler);
   heartbeatStates.delete(socket);
 }
 
