@@ -67,7 +67,7 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
 
   function handleJoin(socket: WebSocket, roomCode: string, ip: string, clientVersion?: string): void {
     if (!isCompatibleVersion(clientVersion)) {
-      sendTo(socket, { type: 'error', code: ErrorCode.INVALID_TOKEN, message: `Incompatible protocol version: ${clientVersion}` });
+      sendTo(socket, { type: 'error', code: ErrorCode.PROTOCOL_VERSION_MISMATCH, message: `Incompatible protocol version: ${clientVersion}` });
       return;
     }
 
@@ -174,7 +174,7 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
 
   function handleRejoin(socket: WebSocket, roomCode: string, sessionToken: string, clientVersion?: string): void {
     if (!isCompatibleVersion(clientVersion)) {
-      sendTo(socket, { type: 'error', code: ErrorCode.INVALID_TOKEN, message: `Incompatible protocol version: ${clientVersion}` });
+      sendTo(socket, { type: 'error', code: ErrorCode.PROTOCOL_VERSION_MISMATCH, message: `Incompatible protocol version: ${clientVersion}` });
       return;
     }
     const entry = store.getGracePeriodEntry(sessionToken);

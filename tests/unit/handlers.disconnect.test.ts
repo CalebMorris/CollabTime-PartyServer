@@ -80,6 +80,30 @@ const TEST_CONFIG = {
   MAX_PARTICIPANTS_PER_ROOM: 50,
 };
 
+describe('handleJoin — protocol version', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+  });
+
+  it('returns PROTOCOL_VERSION_MISMATCH when client sends an incompatible version', async () => {
+    const { sendTo } = await import('../../src/ws/broadcast.js');
+
+    const socket = makeSocket();
+    const store = makeStore();
+    store.getRoom.mockReturnValue(null);
+
+    const rateLimiter = { isRateLimited: vi.fn().mockReturnValue(false), recordFailure: vi.fn() } as any;
+    const { handleMessage } = createHandlers(store, TEST_CONFIG, rateLimiter);
+    handleMessage(socket, JSON.stringify({ type: 'join', roomCode: 'a-b-c', protocolVersion: '99.0' }), '127.0.0.1');
+
+    expect(sendTo).toHaveBeenCalledWith(socket, expect.objectContaining({
+      type: 'error',
+      code: 'PROTOCOL_VERSION_MISMATCH',
+    }));
+  });
+});
+
 describe('handleJoin', () => {
   beforeEach(() => {
     vi.useFakeTimers();
