@@ -280,7 +280,33 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
     // Called when socket closes without explicit leave
     const meta = registry.getMeta(socket);
     if (!meta) return;
+
     stopHeartbeat(socket);
+
+    const room = store.getRoom(meta.roomCode);
+    const participant = room?.participants.get(meta.participantToken);
+
+    // If participant is already marked disconnected (heartbeat path beat us here), skip grace setup
+    if (participant && participant.isConnected) {
+      participant.isConnected = false;
+      broadcastToRoom(meta.roomCode, {
+        type: 'participant_disconnected',
+        participantToken: meta.participantToken,
+      });
+
+      const graceTimer = setTimeout(() => {
+        onGraceExpired(meta.participantToken, meta.roomCode);
+        store.deleteGracePeriodEntry(meta.sessionToken);
+      }, heartbeatOptions.gracePeriodMs);
+
+      store.setGracePeriodEntry(meta.sessionToken, {
+        roomCode: meta.roomCode,
+        participantToken: meta.participantToken,
+        expiresAtMs: Date.now() + heartbeatOptions.gracePeriodMs,
+        timer: graceTimer,
+      });
+    }
+
     registry.cleanupSocket(socket);
   }
 
