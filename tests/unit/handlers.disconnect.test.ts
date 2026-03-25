@@ -133,6 +133,63 @@ describe('handleJoin', () => {
   });
 });
 
+describe('handleLeave', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+  });
+
+  it('does not call socket.close after processing leave', async () => {
+    const { registry } = await import('../../src/ws/registry.js');
+
+    const socket = makeSocket();
+    const store = makeStore();
+    const participant = { isConnected: true, participantToken: 'p-token', sessionToken: 's-token', nickname: 'Test Nick' };
+    const room = { participants: new Map([['p-token', participant]]), state: 'active', code: 'a-b-c' };
+
+    vi.mocked(registry.getMeta).mockReturnValue({
+      participantToken: 'p-token',
+      sessionToken: 's-token',
+      roomCode: 'a-b-c',
+    } as any);
+    store.getRoom.mockReturnValue(room);
+
+    const rateLimiter = { isRateLimited: vi.fn().mockReturnValue(false), recordFailure: vi.fn() } as any;
+    const { handleMessage } = createHandlers(store, TEST_CONFIG, rateLimiter);
+    handleMessage(socket, JSON.stringify({ type: 'leave' }), '127.0.0.1');
+
+    expect((socket as any).close).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleJoin — double join', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+  });
+
+  it('ignores a second join on an already-registered socket', async () => {
+    const { registry } = await import('../../src/ws/registry.js');
+
+    const socket = makeSocket();
+    const store = makeStore();
+    store.getRoom.mockReturnValue(null);
+
+    // Socket is already registered (has meta)
+    vi.mocked(registry.getMeta).mockReturnValue({
+      participantToken: 'p-token',
+      sessionToken: 's-token',
+      roomCode: 'a-b-c',
+    } as any);
+
+    const rateLimiter = { isRateLimited: vi.fn().mockReturnValue(false), recordFailure: vi.fn() } as any;
+    const { handleMessage } = createHandlers(store, TEST_CONFIG, rateLimiter);
+    handleMessage(socket, JSON.stringify({ type: 'join', roomCode: 'x-y-z', protocolVersion: '1.0' }), '127.0.0.1');
+
+    expect(store.setRoom).not.toHaveBeenCalled();
+  });
+});
+
 describe('handleDisconnect', () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -28,8 +28,14 @@ function capitalize(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-export function generateNickname(): string {
-  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const noun = nouns[Math.floor(Math.random() * nouns.length)];
-  return `${capitalize(adj)} ${capitalize(noun)}`;
+export function generateNickname(existing: ReadonlySet<string> = new Set()): string {
+  let nickname: string;
+  let attempts = 0;
+  do {
+    const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const noun = nouns[Math.floor(Math.random() * nouns.length)];
+    nickname = `${capitalize(adj)} ${capitalize(noun)}`;
+    attempts++;
+  } while (existing.has(nickname) && attempts < 100);
+  return nickname;
 }

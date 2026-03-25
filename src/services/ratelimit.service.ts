@@ -25,7 +25,7 @@ export class RateLimitService {
       this.entries.delete(ip);
       return false;
     }
-    return entry.attempts > this.maxAttempts;
+    return entry.attempts >= this.maxAttempts;
   }
 
   recordFailure(ip: string): void {

@@ -27,9 +27,7 @@ const store = new InMemoryStore({
     for (const socket of sockets) {
       socket.close();
     }
-    for (const participantToken of room.participants.keys()) {
-      store.deleteParticipantIndex(participantToken);
-    }
+    void room; // participant index cleanup handled by gc()
   },
 });
 
@@ -83,8 +81,8 @@ fastify.register(async function (fastify) {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  fastify.log.info('SIGTERM received, shutting down');
+async function shutdown(signal: string) {
+  fastify.log.info(`${signal} received, shutting down`);
   isShuttingDown = true;
   store.stop();
   for (const [roomCode, room] of store.getAllRooms()) {
@@ -100,7 +98,10 @@ process.on('SIGTERM', async () => {
   }
   await fastify.close();
   process.exit(0);
-});
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 try {
   await fastify.listen({ port: config.PORT, host: '0.0.0.0' });

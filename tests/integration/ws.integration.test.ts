@@ -532,14 +532,16 @@ describe('Phase 3: resilience', () => {
     // Fake timers are already active from beforeEach.
     // expireStore's setInterval is captured by the fake timer system.
 
+    // Inject the fake-timer-aware setInterval so the GC interval is captured
+    // regardless of when vi.useFakeTimers() is called relative to construction.
     const expireStore = new InMemoryStore({
       gcIntervalMs: 1_000,
       roomTtlMs: 5_000,
-      onRoomExpired: (roomCode, room) => {
+      setIntervalFn: setInterval,
+      onRoomExpired: (roomCode, _room) => {
         broadcastToRoom(roomCode, { type: 'room_expired' });
         const sockets = registry.cleanupRoom(roomCode);
         for (const s of sockets) s.close();
-        for (const pt of room.participants.keys()) expireStore.deleteParticipantIndex(pt);
       },
     });
     const expireRateLimiter = new RateLimitService({

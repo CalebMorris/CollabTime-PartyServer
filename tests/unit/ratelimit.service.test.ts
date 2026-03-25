@@ -68,6 +68,15 @@ describe('RateLimitService', () => {
     expect(rl.isRateLimited(ip)).toBe(true);
   });
 
+  it('rate-limits at exactly maxAttempts failures (no backoff path)', () => {
+    // backoffAfter set higher than maxAttempts so backoff never triggers — tests the maxAttempts guard alone
+    const rl = new RateLimitService({ windowMs: 300_000, maxAttempts: 5, backoffAfter: 999 });
+    const ip = '9.9.9.9';
+
+    for (let i = 0; i < 5; i++) rl.recordFailure(ip);
+    expect(rl.isRateLimited(ip)).toBe(true);
+  });
+
   it('exponential backoff increases with more failures', () => {
     const rl = new RateLimitService({ windowMs: 300_000, maxAttempts: 10, backoffAfter: 3 });
     const ip = '1.2.3.4';

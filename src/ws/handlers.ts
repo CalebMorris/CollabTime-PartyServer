@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import type { Store } from '../store/types.js';
 import type { Config } from '../config/index.js';
 import type { Room } from '../models/domain.js';
-import { ProtocolError, ErrorCode } from '../errors/index.js';
+import { ErrorCode } from '../errors/index.js';
 import { generateToken, generateParticipantToken } from '../utils/crypto.js';
 import { generateNickname } from '../services/wordlist.service.js';
 import { registry } from './registry.js';
@@ -20,9 +20,6 @@ import { parseClientMessage } from '../utils/validation.js';
 import { RateLimitService } from '../services/ratelimit.service.js';
 import type { RoomSnapshot, ParticipantSnapshot } from '../models/messages.js';
 import { PROTOCOL_VERSION, isCompatibleVersion } from '../config/constants.js';
-
-// Suppress unused import warning — ProtocolError is available for future use
-void ProtocolError;
 
 export interface Logger {
   info(msg: string, data?: Record<string, unknown>): void;
@@ -66,6 +63,7 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
   }
 
   function handleJoin(socket: WebSocket, roomCode: string, ip: string, clientVersion?: string): void {
+    if (registry.getMeta(socket)) return; // socket already joined, ignore duplicate
     if (!isCompatibleVersion(clientVersion)) {
       sendTo(socket, { type: 'error', code: ErrorCode.PROTOCOL_VERSION_MISMATCH, message: `Incompatible protocol version: ${clientVersion}` });
       return;
@@ -104,7 +102,8 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
 
     const participantToken = generateParticipantToken();
     const sessionToken = generateToken();
-    const nickname = generateNickname();
+    const existingNicknames = new Set([...room.participants.values()].map(p => p.nickname));
+    const nickname = generateNickname(existingNicknames);
     const now = Date.now();
 
     room.participants.set(participantToken, {
@@ -168,8 +167,6 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
     }
     room.lastActivityMs = Date.now();
     logger?.info('participant_left', { roomCode: meta.roomCode, participantToken: meta.participantToken });
-
-    socket.close();
   }
 
   function handleRejoin(socket: WebSocket, roomCode: string, sessionToken: string, clientVersion?: string): void {

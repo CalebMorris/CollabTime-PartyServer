@@ -30,6 +30,26 @@ describe('wordlist.service', () => {
     expect(results.size).toBeGreaterThan(10);
   });
 
+  it('avoids nicknames already in use', () => {
+    initWordlist();
+    let callCount = 0;
+    vi.spyOn(Math, 'random').mockImplementation(() => {
+      callCount++;
+      // First two calls: pick index 0 (collision nickname)
+      // Subsequent calls: pick index 0.5 (different word)
+      return callCount <= 2 ? 0 : 0.5;
+    });
+
+    callCount = 0;
+    const collisionNickname = generateNickname(new Set());
+    const existing = new Set([collisionNickname]);
+
+    callCount = 0;
+    const result = generateNickname(existing);
+    expect(result).not.toBe(collisionNickname);
+    vi.restoreAllMocks();
+  });
+
   it('throws when wordlist file does not exist', async () => {
     // We test that the loadWordlist function throws for a missing file
     // by importing the module with a mocked fs.readFileSync

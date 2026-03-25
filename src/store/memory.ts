@@ -5,6 +5,7 @@ interface InMemoryStoreOptions {
   gcIntervalMs?: number;
   roomTtlMs?: number;
   onRoomExpired?: (roomCode: string, room: Room) => void;
+  setIntervalFn?: typeof setInterval;
 }
 
 export class InMemoryStore implements Store {
@@ -17,7 +18,8 @@ export class InMemoryStore implements Store {
   constructor(options: InMemoryStoreOptions = {}) {
     this.roomTtlMs = options.roomTtlMs ?? 7_200_000;
     const gcIntervalMs = options.gcIntervalMs ?? 10_000;
-    this.gcTimer = setInterval(() => this.gc(options.onRoomExpired), gcIntervalMs);
+    const setIntervalFn = options.setIntervalFn ?? setInterval;
+    this.gcTimer = setIntervalFn(() => this.gc(options.onRoomExpired), gcIntervalMs);
     this.gcTimer.unref?.();
   }
 
