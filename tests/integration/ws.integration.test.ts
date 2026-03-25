@@ -104,6 +104,7 @@ describe('Phase 1 & 2 integration', () => {
   let url: string;
 
   beforeEach(async () => {
+    vi.useFakeTimers();
     const result = await buildServer();
     fastify = result.fastify;
     store = result.store;
@@ -111,6 +112,7 @@ describe('Phase 1 & 2 integration', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await fastify.close();
   });
 
@@ -328,10 +330,10 @@ describe('Phase 1 & 2 integration', () => {
     send(alice, { type: 'propose', epochMs: epoch });
     await nextMessage(alice);
     await nextMessage(bob);
+    const aliceLockInMessages$ = collectMessages(alice, 2);
+    const bobLockInMessages$ = collectMessages(bob, 2);
     send(bob, { type: 'propose', epochMs: epoch });
-    // Consume locked_in messages
-    await collectMessages(alice, 2);
-    await collectMessages(bob, 2);
+    await Promise.all([aliceLockInMessages$, bobLockInMessages$]);
 
     // Now try to propose again
     send(alice, { type: 'propose', epochMs: epoch + 120_000 });
@@ -359,9 +361,10 @@ describe('Phase 1 & 2 integration', () => {
     send(alice, { type: 'propose', epochMs: epoch });
     await nextMessage(alice);
     await nextMessage(bob);
+    const aliceLockInMessages$ = collectMessages(alice, 2);
+    const bobLockInMessages$ = collectMessages(bob, 2);
     send(bob, { type: 'propose', epochMs: epoch });
-    await collectMessages(alice, 2);
-    await collectMessages(bob, 2);
+    await Promise.all([aliceLockInMessages$, bobLockInMessages$]);
 
     const carol = await connect(url);
     send(carol, { type: 'join', roomCode: 'warm-hawk-nest' });
@@ -390,9 +393,10 @@ describe('Phase 1 & 2 integration', () => {
     send(alice, { type: 'propose', epochMs: epoch });
     await nextMessage(alice);
     await nextMessage(bob);
+    const aliceLockInMessages$ = collectMessages(alice, 2);
+    const bobLockInMessages$ = collectMessages(bob, 2);
     send(bob, { type: 'propose', epochMs: epoch });
-    await collectMessages(alice, 2);
-    await collectMessages(bob, 2);
+    await Promise.all([aliceLockInMessages$, bobLockInMessages$]);
 
     // Room is now locked_in — its state must stay locked_in after a failed join
     const carol = await connect(url);
@@ -413,6 +417,7 @@ describe('Phase 3: resilience', () => {
   let url: string;
 
   beforeEach(async () => {
+    vi.useFakeTimers();
     const result = await buildServer();
     fastify = result.fastify;
     store = result.store;
@@ -524,9 +529,8 @@ describe('Phase 3: resilience', () => {
   });
 
   it('room expiry — GC fires room_expired broadcast and closes sockets', async () => {
-    // Build a dedicated server AFTER activating fake timers so the store's
-    // setInterval is captured by the fake timer system.
-    vi.useFakeTimers();
+    // Fake timers are already active from beforeEach.
+    // expireStore's setInterval is captured by the fake timer system.
 
     const expireStore = new InMemoryStore({
       gcIntervalMs: 1_000,

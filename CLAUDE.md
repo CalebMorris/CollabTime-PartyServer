@@ -12,6 +12,10 @@ Do not add frontend code, components, or client-side logic here.
   at a time — rather than presenting all questions at once.
 - Default to MVP simplicity. Do not add capabilities "for later" unless explicitly asked.
 
+## Coding Style
+- Use descriptive variable names — avoid abbreviations or opaque suffixes.
+- Name `Promise<_>` variables with a `$` suffix: `aliceJoined$`, not `aliceJoinedP` or `aliceJoinedPromise`.
+
 ## Tooling
 - **Package manager:** npm.
 - **Dev server:** `npm run dev` runs `tsx watch` (JIT TypeScript; no build step needed).
