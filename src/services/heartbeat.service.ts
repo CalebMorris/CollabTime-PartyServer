@@ -62,6 +62,7 @@ export function startHeartbeat(
       });
 
       registry.cleanupSocket(socket);
+      socket.terminate();
     }, options.pongTimeoutMs);
   }, options.pingMs);
 

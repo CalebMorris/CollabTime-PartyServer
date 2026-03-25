@@ -2,12 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { startHeartbeat, stopHeartbeat } from '../../src/services/heartbeat.service.js';
 
+vi.mock('../../src/ws/registry.js', () => ({
+  registry: {
+    getMeta: vi.fn(),
+    cleanupSocket: vi.fn(),
+  },
+}));
+
+vi.mock('../../src/ws/broadcast.js', () => ({
+  broadcastToRoom: vi.fn(),
+}));
+
 // Minimal WebSocket mock using EventEmitter so .on/.removeListener work correctly
 function makeSocket() {
   const emitter = new EventEmitter();
   const socket = Object.assign(emitter, {
     readyState: 1, // WebSocket.OPEN
     ping: vi.fn(),
+    terminate: vi.fn(),
   });
   return socket as unknown as import('ws').WebSocket;
 }
@@ -43,6 +55,27 @@ describe('heartbeat.service', () => {
 
     const pongListenerCount = socket.listenerCount('pong');
     expect(pongListenerCount).toBe(1);
+  });
+
+  it('terminates socket when pong timeout fires', async () => {
+    const { registry } = await import('../../src/ws/registry.js');
+    const socket = makeSocket();
+    const store = makeStore();
+    const participant = { isConnected: true, lastHeartbeatMs: Date.now() };
+    const room = { participants: new Map([['p-token', participant]]) };
+
+    vi.mocked(registry.getMeta).mockReturnValue({
+      participantToken: 'p-token',
+      roomCode: 'a-b-c',
+      sessionToken: 's-token',
+    } as any);
+    store.getRoom.mockReturnValue(room);
+
+    startHeartbeat(socket as any, store, OPTIONS, vi.fn());
+    vi.advanceTimersByTime(OPTIONS.pingMs);           // fire ping
+    vi.advanceTimersByTime(OPTIONS.pongTimeoutMs);    // fire pong timeout (no pong sent)
+
+    expect((socket as any).terminate).toHaveBeenCalledOnce();
   });
 
   it('removes pong listener when stopHeartbeat is called', () => {
