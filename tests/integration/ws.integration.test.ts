@@ -100,11 +100,13 @@ async function collectMessages(ws: WebSocket, count: number, timeoutMs = 2000): 
 
 describe('Phase 1 & 2 integration', () => {
   let fastify: Awaited<ReturnType<typeof buildServer>>['fastify'];
+  let store: Awaited<ReturnType<typeof buildServer>>['store'];
   let url: string;
 
   beforeEach(async () => {
     const result = await buildServer();
     fastify = result.fastify;
+    store = result.store;
     url = result.url;
   });
 
@@ -368,6 +370,36 @@ describe('Phase 1 & 2 integration', () => {
     if (errMsg.type === 'error') {
       expect(errMsg.code).toBe('ROOM_NOT_FOUND');
     }
+
+    alice.close();
+    bob.close();
+    carol.close();
+  });
+
+  it('join to locked_in room does not create a phantom waiting room', async () => {
+    const alice = await connect(url);
+    const bob = await connect(url);
+
+    send(alice, { type: 'join', roomCode: 'dark-wolf-peak' });
+    await nextMessage(alice);
+    send(bob, { type: 'join', roomCode: 'dark-wolf-peak' });
+    await nextMessage(alice);
+    await nextMessage(bob);
+
+    const epoch = 1_711_209_600_000;
+    send(alice, { type: 'propose', epochMs: epoch });
+    await nextMessage(alice);
+    await nextMessage(bob);
+    send(bob, { type: 'propose', epochMs: epoch });
+    await collectMessages(alice, 2);
+    await collectMessages(bob, 2);
+
+    // Room is now locked_in — its state must stay locked_in after a failed join
+    const carol = await connect(url);
+    send(carol, { type: 'join', roomCode: 'dark-wolf-peak' });
+    await nextMessage(carol);
+
+    expect(store.getRoom('dark-wolf-peak')?.state).toBe('locked_in');
 
     alice.close();
     bob.close();

@@ -80,6 +80,35 @@ const TEST_CONFIG = {
   MAX_PARTICIPANTS_PER_ROOM: 50,
 };
 
+describe('handleJoin', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+  });
+
+  it('does not call store.setRoom when joining a locked_in room', async () => {
+    const { registry } = await import('../../src/ws/registry.js');
+    vi.mocked(registry.getMeta).mockReturnValue(undefined);
+
+    const socket = makeSocket();
+    const store = makeStore();
+    const lockedRoom = {
+      code: 'a-b-c',
+      state: 'locked_in' as const,
+      participants: new Map(),
+      createdAtMs: Date.now(),
+      lastActivityMs: Date.now(),
+    };
+    store.getRoom.mockReturnValue(lockedRoom);
+
+    const rateLimiter = { isRateLimited: vi.fn().mockReturnValue(false), recordFailure: vi.fn() } as any;
+    const { handleMessage } = createHandlers(store, TEST_CONFIG, rateLimiter);
+    handleMessage(socket, JSON.stringify({ type: 'join', roomCode: 'a-b-c', protocolVersion: '1.0' }), '127.0.0.1');
+
+    expect(store.setRoom).not.toHaveBeenCalled();
+  });
+});
+
 describe('handleDisconnect', () => {
   beforeEach(() => {
     vi.useFakeTimers();

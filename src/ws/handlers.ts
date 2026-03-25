@@ -76,7 +76,15 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
       return;
     }
 
-    let room = store.getRoom(roomCode);
+    const existingRoom = store.getRoom(roomCode);
+
+    if (existingRoom?.state === 'locked_in') {
+      rateLimiter.recordFailure(ip);
+      sendTo(socket, { type: 'error', code: ErrorCode.ROOM_NOT_FOUND, message: 'Room not found' });
+      return;
+    }
+
+    let room = existingRoom;
     if (!room) {
       room = {
         code: roomCode,
@@ -86,12 +94,6 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
         lastActivityMs: Date.now(),
       };
       store.setRoom(roomCode, room);
-    }
-
-    if (room.state === 'locked_in') {
-      rateLimiter.recordFailure(ip);
-      sendTo(socket, { type: 'error', code: ErrorCode.ROOM_NOT_FOUND, message: 'Room not found' });
-      return;
     }
 
     if (room.participants.size >= config.MAX_PARTICIPANTS_PER_ROOM) {
