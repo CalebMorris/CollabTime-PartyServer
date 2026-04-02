@@ -8,10 +8,12 @@ import { RateLimitService } from './services/ratelimit.service.js';
 import { createHandlers } from './ws/handlers.js';
 import { broadcastToRoom } from './ws/broadcast.js';
 import { registry } from './ws/registry.js';
+import { startEventLoopMonitor, stopEventLoopMonitor, getEventLoopStats } from './metrics/eventloop.js';
 import WebSocket from 'ws';
 
 const config = loadConfig();
 initWordlist();
+startEventLoopMonitor();
 
 let isShuttingDown = false;
 
@@ -55,6 +57,8 @@ await fastify.register(websocket);
 
 fastify.get('/health', async () => ({ status: 'ok' }));
 
+fastify.get('/metrics', async () => ({ eventLoopLag: getEventLoopStats() }));
+
 fastify.get('/ready', async (_req, reply) => {
   if (isShuttingDown) {
     return reply.code(503).send({ status: 'shutting_down' });
@@ -84,6 +88,7 @@ fastify.register(async function (fastify) {
 async function shutdown(signal: string) {
   fastify.log.info(`${signal} received, shutting down`);
   isShuttingDown = true;
+  stopEventLoopMonitor();
   store.stop();
   for (const [roomCode, room] of store.getAllRooms()) {
     fastify.log.info({ roomCode }, 'room_expired_on_shutdown');
