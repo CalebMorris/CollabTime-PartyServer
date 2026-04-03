@@ -1,8 +1,7 @@
 node_modules
-src
+dist
 tests
 docs
 *.md
 .env*
-tsconfig.json
 vitest.config.ts
