@@ -14,6 +14,7 @@ const configSchema = z.object({
   RATE_LIMIT_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
   RATE_LIMIT_BACKOFF_AFTER: z.coerce.number().int().positive().default(3),
   MAX_PARTICIPANTS_PER_ROOM: z.coerce.number().int().positive().default(50),
+  EVENT_LOOP_LAG_THRESHOLD_MS: z.coerce.number().int().positive().default(100),
 }).superRefine((data, ctx) => {
   if (data.NODE_ENV === 'production' && !data.CORS_ORIGIN) {
     ctx.addIssue({

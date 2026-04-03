@@ -33,7 +33,7 @@ Do not add frontend code, components, or client-side logic here.
 A connected participant **with no proposal is excluded from quorum** — they neither block nor contribute to lock-in. Lock-in requires: at least 2 participants with proposals, and all their minute-truncated epochs match. This is intentional so late joiners don't stall an agreement already in progress.
 
 ### Rate limiter scope
-Only `ROOM_NOT_FOUND` and `ROOM_FULL` errors increment the failed-join counter. `REJOIN_FAILED` and `INVALID_TOKEN` must **not** count — they are reconnection errors; penalizing them would block legitimate recovery.
+Only `ROOM_NOT_FOUND` and `ROOM_FULL` errors increment the failed-join counter. `REJOIN_FAILED`, `INVALID_TOKEN`, and `SERVER_AT_CAPACITY` must **not** count. `REJOIN_FAILED` and `INVALID_TOKEN` are reconnection errors; penalizing them would block legitimate recovery. `SERVER_AT_CAPACITY` is a transient server condition — the client did nothing wrong.
 
 ### Heartbeat & grace period timeline
 ```
@@ -49,6 +49,11 @@ Full silence before removal: 60s. Reconnect window: T+30s–T+60s (30s).
 
 ### Build order
 `src/errors/index.ts` (ProtocolError + ErrorCode enum) must be written **first** — everything else imports from it. `src/models/domain.ts` and `src/models/messages.ts` should be committed early; they are the shared TypeScript API contract for the frontend team.
+
+### Capacity & load management
+The server gates **new room creation** (not joins to existing rooms) when event loop p95 lag exceeds `EVENT_LOOP_LAG_THRESHOLD_MS` (default: 100ms). Clients receive `SERVER_AT_CAPACITY` and should retry after checking `GET /capacity`. `src/metrics/capacity.ts` owns `isAcceptingRooms(thresholdMs)`. When stats are unavailable (monitor not running), the function returns `true` — safe default, never block on missing data.
+
+`GET /capacity` is rate-limited per IP (10 req/min, inline in `src/main.ts`). It always returns HTTP 200; capacity is a soft signal, not an infrastructure failure.
 
 ## Pending Product Owner Sign-Offs
 These two decisions are deliberately unresolved. Do not implement them unilaterally:

@@ -1,0 +1,257 @@
+openapi: 3.0.3
+
+info:
+  title: collab-time Server API
+  version: "1.0"
+  description: |
+    REST API for the collab-time collaboration server.
+
+    ## WebSocket
+    Real-time collaboration is handled over a WebSocket connection at `GET /ws`.
+    OpenAPI 3.0 has no native WebSocket support, so the protocol is described here.
+
+    ### Connection
+    Upgrade `GET /ws` to a WebSocket connection. All messages are JSON-encoded text frames.
+
+    ### Client → Server messages
+
+    **join**
+    ```json
+    { "type": "join", "roomCode": "word-word-word", "protocolVersion": "1.0" }
+    ```
+    `roomCode` must match `/^[a-z]+-[a-z]+-[a-z]+$/`. `protocolVersion` is optional.
+
+    **rejoin**
+    ```json
+    { "type": "rejoin", "roomCode": "word-word-word", "sessionToken": "<32 hex chars>", "protocolVersion": "1.0" }
+    ```
+
+    **propose**
+    ```json
+    { "type": "propose", "epochMs": 1700000000000 }
+    ```
+    `epochMs` must be an integer in the range `[0, 9999999999999]`.
+
+    **leave**
+    ```json
+    { "type": "leave" }
+    ```
+
+    ### Server → Client messages
+    `joined`, `participant_joined`, `participant_left`, `participant_disconnected`,
+    `participant_reconnected`, `room_activated`, `room_deactivated`, `proposal_updated`,
+    `locked_in`, `room_expired`, `error`.
+
+    ### Error codes
+    `ROOM_NOT_FOUND`, `ROOM_NOT_ACTIVE`, `ROOM_FULL`, `RATE_LIMITED`,
+    `REJOIN_FAILED`, `INVALID_TOKEN`, `PROTOCOL_VERSION_MISMATCH`, `SERVER_AT_CAPACITY`.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+
+security: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Always returns 200 while the process is running. Use `/ready` for orchestration probes.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Server is running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkStatus"
+              examples:
+                ok:
+                  summary: Server is running
+                  value:
+                    status: ok
+
+  /ready:
+    get:
+      summary: Readiness probe
+      description: |
+        Returns 200 when the server is ready to accept traffic.
+        Returns 503 during graceful shutdown (after SIGTERM/SIGINT is received).
+        Intended for Kubernetes `readinessProbe` or equivalent orchestration checks.
+      operationId: getReady
+      responses:
+        "200":
+          description: Server is ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkStatus"
+              examples:
+                ok:
+                  summary: Server is ready
+                  value:
+                    status: ok
+        "503":
+          description: Server is shutting down and no longer accepting traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShuttingDownStatus"
+              examples:
+                shutting_down:
+                  summary: Graceful shutdown in progress
+                  value:
+                    status: shutting_down
+
+  /capacity:
+    get:
+      summary: Capacity check
+      description: |
+        Returns whether the server is currently accepting new room creation.
+        New room creation is gated on event loop p95 lag; existing room joins are unaffected.
+
+        **Rate limited:** 10 requests per 60 seconds per client IP.
+        A 429 response means the caller is polling too aggressively — back off before retrying.
+
+        The response is always a soft signal. HTTP 200 is returned even when `accepting_rooms`
+        is `false`; capacity is not an infrastructure failure.
+      operationId: getCapacity
+      responses:
+        "200":
+          description: Capacity status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapacityResponse"
+              examples:
+                accepting:
+                  summary: Server is accepting new rooms
+                  value:
+                    accepting_rooms: true
+                    reason: null
+                at_capacity:
+                  summary: Server is at capacity due to high load
+                  value:
+                    accepting_rooms: false
+                    reason: HIGH_LOAD
+        "429":
+          description: Rate limit exceeded (10 requests per 60 seconds per IP).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorTooManyRequests"
+              examples:
+                too_many_requests:
+                  summary: Rate limit exceeded
+                  value:
+                    error: Too Many Requests
+
+  /metrics:
+    get:
+      summary: Server performance metrics
+      description: |
+        Returns event loop lag statistics collected by Node.js `perf_hooks.monitorEventLoopDelay`.
+        `eventLoopLag` is `null` when the monitor is not running.
+        All latency values are in milliseconds.
+      operationId: getMetrics
+      responses:
+        "200":
+          description: Current server metrics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+              examples:
+                running:
+                  summary: Monitor is running
+                  value:
+                    eventLoopLag:
+                      meanMs: 1.2
+                      p50Ms: 0.9
+                      p95Ms: 4.1
+                      p99Ms: 12.3
+                      maxMs: 87.4
+                not_running:
+                  summary: Monitor is not running
+                  value:
+                    eventLoopLag: null
+
+components:
+  schemas:
+    OkStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    ShuttingDownStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [shutting_down]
+
+    CapacityResponse:
+      type: object
+      required: [accepting_rooms, reason]
+      properties:
+        accepting_rooms:
+          type: boolean
+          description: >
+            `true` when the server will create new rooms for joining clients.
+            `false` when event loop p95 lag exceeds the configured threshold.
+        reason:
+          type: string
+          nullable: true
+          enum: [HIGH_LOAD]
+          description: >
+            `null` when `accepting_rooms` is `true`.
+            `"HIGH_LOAD"` when the server is throttling new room creation due to event loop lag.
+
+    ErrorTooManyRequests:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: ["Too Many Requests"]
+
+    EventLoopStats:
+      type: object
+      required: [meanMs, p50Ms, p95Ms, p99Ms, maxMs]
+      properties:
+        meanMs:
+          type: number
+          minimum: 0
+          description: Mean event loop lag in milliseconds.
+        p50Ms:
+          type: number
+          minimum: 0
+          description: 50th-percentile event loop lag in milliseconds.
+        p95Ms:
+          type: number
+          minimum: 0
+          description: 95th-percentile event loop lag in milliseconds. Used by the capacity gate.
+        p99Ms:
+          type: number
+          minimum: 0
+          description: 99th-percentile event loop lag in milliseconds.
+        maxMs:
+          type: number
+          minimum: 0
+          description: Maximum observed event loop lag in milliseconds.
+
+    MetricsResponse:
+      type: object
+      required: [eventLoopLag]
+      properties:
+        eventLoopLag:
+          type: object
+          nullable: true
+          description: >
+            Event loop delay statistics. `null` when the monitor is not running.
+          allOf:
+            - $ref: "#/components/schemas/EventLoopStats"
