@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    setupFiles: ['./tests/vitest.setup.ts'],
-    exclude: ['**/node_modules/**', '**/tests/e2e/**'],
+    include: ['tests/e2e/**/*.e2e.test.ts'],
+    testTimeout: 15_000,
   },
 });

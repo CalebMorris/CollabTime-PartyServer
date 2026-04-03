@@ -19,8 +19,9 @@ Do not add frontend code, components, or client-side logic here.
 ## Tooling
 - **Package manager:** npm.
 - **Dev server:** `npm run dev` runs `tsx watch` (JIT TypeScript; no build step needed).
-- **Build:** `npm run build` runs `tsc` → `esbuild`.
+- **Build:** `npm run build` runs `tsc` → `esbuild`. Note: esbuild's default CJS output is **incompatible with top-level await** in this codebase. The Docker build uses `npx tsc` directly (not `npm run build`) to avoid this.
 - **Tests:** Vitest. Use `vi.useFakeTimers()` for all timing-sensitive tests (heartbeat, grace period, room expiry). Do not write slow tests that sleep or wait on real timers.
+- **E2E tests:** `npm run test:e2e` — excluded from `npm test`. Uses `E2E_HOST` env var (do **not** use `BASE_URL`; it is commonly pre-set to `/` by shell environments and the `??` operator won't override it). Default target is `localhost:3000`. Run against deployed service with `E2E_HOST=<host> npm run test:e2e`.
 - **tsconfig:** `"moduleResolution": "node16"` is required. The default `"node"` breaks ESM/CJS interop with Fastify and ws on Node 20.
 
 ## Architecture Invariants
@@ -54,6 +55,25 @@ Full silence before removal: 60s. Reconnect window: T+30s–T+60s (30s).
 The server gates **new room creation** (not joins to existing rooms) when event loop p95 lag exceeds `EVENT_LOOP_LAG_THRESHOLD_MS` (default: 100ms). Clients receive `SERVER_AT_CAPACITY` and should retry after checking `GET /capacity`. `src/metrics/capacity.ts` owns `isAcceptingRooms(thresholdMs)`. When stats are unavailable (monitor not running), the function returns `true` — safe default, never block on missing data.
 
 `GET /capacity` is rate-limited per IP (10 req/min, inline in `src/main.ts`). It always returns HTTP 200; capacity is a soft signal, not an infrastructure failure.
+
+## Architecture Notes
+
+### Room code format
+Room codes must match `/^[a-z]+-[a-z]+-[a-z]+$/` — three purely lowercase alphabetic words, no digits. Validated by Zod in `src/utils/validation.ts`. When generating test room codes, use random alpha-only strings; do not use alphanumeric IDs.
+
+### Docker / deployment
+- The `Dockerfile` is multi-stage. After `npx tsc`, wordlist `.txt` files must be explicitly copied: `COPY src/wordlists ./dist/wordlists`. The TypeScript compiler does not copy non-`.ts` assets.
+- The `.dockerignore` must **not** exclude `src/` or `tsconfig.json` — the build stage needs them.
+- Deployed on Northflank free Developer Sandbox. See `docs/DEPLOY_NORTHFLANK.md` for the step-by-step guide.
+
+### E2E test message ordering
+Over a real network, always register all WebSocket message listeners **before** sending. Sequential `await nextMessage(alice); await nextMessage(bob)` works locally (synchronous event loop) but drops messages in production — the second message can arrive before the second listener is registered. Use the parallel pattern instead:
+```typescript
+const aliceMsg$ = nextMessage(alice);
+const bobMsg$ = nextMessage(bob);
+send(alice, { type: 'propose', epochMs: epoch });
+await Promise.all([aliceMsg$, bobMsg$]);
+```
 
 ## Pending Product Owner Sign-Offs
 These two decisions are deliberately unresolved. Do not implement them unilaterally:

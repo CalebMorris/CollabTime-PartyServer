@@ -2,7 +2,6 @@
 
 A lightweight, ephemeral WebSocket relay server for multiplayer timezone negotiation. Groups create or join a session, propose meeting times (each person sees times in their own timezone), and converge by proposing the same time. No accounts. No voting. When everyone agrees — they're **Locked In**.
 
----
 
 ## Core Goals
 
@@ -11,7 +10,6 @@ A lightweight, ephemeral WebSocket relay server for multiplayer timezone negotia
 - **Ephemeral sessions** — in-memory only; auto-expires after ~2 hours of inactivity
 - **Agreement through convergence** — no voting buttons; "agreement" means everyone proposes the same time
 
----
 
 ## Key Features
 
@@ -107,7 +105,6 @@ The server is UI-agnostic. The frontend lives in a separate repository. Server r
 
 `GET /capacity` is rate-limited to 10 requests/minute per IP. It always returns HTTP 200; clients should read `accepting_rooms` from the body. When `accepting_rooms` is false, new room creation will be rejected with `SERVER_AT_CAPACITY` — do not attempt join, show the user a "server busy" message and retry after a few seconds.
 
----
 
 ## Dead-Room UX
 
@@ -123,7 +120,36 @@ When a user opens a link to an inactive or invalid session:
 
 The locked-in case is special: the confirmed time is encoded in the URL so late arrivals can still retrieve it.
 
----
+
+## Development
+
+```bash
+npm install
+npm run dev        # tsx watch — no build step needed
+```
+
+Environment variables are validated at startup. Copy `.env.example` to `.env` and set `CORS_ORIGIN` for production. Full variable reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+
+## Testing
+
+```bash
+npm test           # unit + integration (Vitest, fake timers, no network)
+npm run test:e2e   # E2E against local dev server (localhost:3000)
+
+# E2E against deployed service
+E2E_HOST=<host> npm run test:e2e
+```
+
+E2E tests live in `tests/e2e/` and are excluded from `npm test`. They require a running server — local or remote.
+
+
+## Deployment
+
+Deployed on **Northflank** free tier. Step-by-step guide: [`docs/DEPLOY_NORTHFLANK.md`](docs/DEPLOY_NORTHFLANK.md).
+
+Production URL: `wss://p01--collabtime--gnkm5ft4t57s.code.run/ws`
+
 
 ## Implementation Phases
 
@@ -134,7 +160,6 @@ The locked-in case is special: the confirmed time is encoded in the URL so late 
 | **Phase 3** | Resilience — reconnection grace period, dead-room handling, full error response schema |
 | **Phase 4** | Deployment — WSS/HTTPS termination, CORS, structured logging pipeline |
 
----
 
 ## Open Questions
 

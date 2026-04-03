@@ -8,6 +8,7 @@
     "build": "tsc && esbuild dist/main.js --bundle --platform=node --outfile=dist/bundle.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "lint": "eslint src tests --ext .ts",
     "typecheck": "tsc --noEmit"
   },
