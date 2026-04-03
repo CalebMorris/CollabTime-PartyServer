@@ -6,6 +6,7 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npx tsc
+COPY src/wordlists ./dist/wordlists
 
 # ---- runtime stage ----
 FROM node:20-alpine
