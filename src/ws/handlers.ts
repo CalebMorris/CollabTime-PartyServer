@@ -42,7 +42,7 @@ function buildRoomSnapshot(room: Room): RoomSnapshot {
   };
 }
 
-export function createHandlers(store: Store, config: Config, rateLimiter: RateLimitService, logger?: Logger) {
+export function createHandlers(store: Store, config: Config, rateLimiter: RateLimitService, logger?: Logger, capacityChecker?: () => boolean) {
   const heartbeatOptions = {
     pingMs: config.HEARTBEAT_PING_MS,
     pongTimeoutMs: config.HEARTBEAT_PONG_TIMEOUT_MS,
@@ -84,6 +84,11 @@ export function createHandlers(store: Store, config: Config, rateLimiter: RateLi
 
     let room = existingRoom;
     if (!room) {
+      if (capacityChecker && !capacityChecker()) {
+        // SERVER_AT_CAPACITY is a transient server condition — do not record a rate-limit failure
+        sendTo(socket, { type: 'error', code: ErrorCode.SERVER_AT_CAPACITY, message: 'Server at capacity' });
+        return;
+      }
       room = {
         code: roomCode,
         state: 'waiting',

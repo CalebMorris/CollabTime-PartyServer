@@ -51,6 +51,7 @@ A lightweight, ephemeral WebSocket relay server for multiplayer timezone negotia
 - **Heartbeat** — server-initiated ping every 20s; client must pong within 10s; grace period triggers at ~25s of silence
 - **Reconnection grace period** — 30 seconds; session token reclaims slot; on success returns full room state snapshot; on failure returns `REJOIN_FAILED` error (client should prompt fresh join)
 - Disconnected participants shown as ghosts — proposal retained, excluded from quorum; cleared on reconnect (`participant_reconnected` broadcast) or removed on grace expiry (`participant_left` broadcast)
+- **Capacity gate** — new room creation rejected with `SERVER_AT_CAPACITY` when server p95 event loop lag exceeds threshold; joining an existing room is never blocked; clients can pre-check `GET /capacity` before attempting join
 
 ### Client Contract
 The server is UI-agnostic. The frontend lives in a separate repository. Server responsibilities:
@@ -91,7 +92,20 @@ The server is UI-agnostic. The frontend lives in a separate repository. Server r
 | `locked_in` | confirmed epoch timestamp (ms) |
 
 **Error codes (closed enum)**
-`ROOM_NOT_FOUND` · `ROOM_NOT_ACTIVE` · `ROOM_FULL` · `RATE_LIMITED` · `INVALID_PROPOSAL` · `REJOIN_FAILED` · `INVALID_TOKEN`
+`ROOM_NOT_FOUND` · `ROOM_NOT_ACTIVE` · `ROOM_FULL` · `RATE_LIMITED` · `INVALID_PROPOSAL` · `REJOIN_FAILED` · `INVALID_TOKEN` · `SERVER_AT_CAPACITY`
+
+`SERVER_AT_CAPACITY` is returned when a client tries to **create a new room** while the server is under high load (p95 event loop lag > `EVENT_LOOP_LAG_THRESHOLD_MS`). Joining an existing room is unaffected. Unlike other errors, this code does **not** count toward the IP-based rate limit — it's transient server load, not client misbehavior. Clients should back off and retry, optionally polling `GET /capacity` first.
+
+### HTTP Endpoints
+
+| Endpoint | Method | Always 200? | Purpose |
+|---|---|---|---|
+| `GET /health` | GET | Yes | Liveness probe — always returns `{ status: "ok" }` |
+| `GET /ready` | GET | No (503 during shutdown) | Readiness probe — returns `{ status: "shutting_down" }` during graceful shutdown |
+| `GET /metrics` | GET | Yes | Event loop lag stats — `{ eventLoopLag: { meanMs, p50Ms, p95Ms, p99Ms, maxMs } }` |
+| `GET /capacity` | GET | Yes | Capacity signal — `{ accepting_rooms: bool, reason: null \| "HIGH_LOAD" }` |
+
+`GET /capacity` is rate-limited to 10 requests/minute per IP. It always returns HTTP 200; clients should read `accepting_rooms` from the body. When `accepting_rooms` is false, new room creation will be rejected with `SERVER_AT_CAPACITY` — do not attempt join, show the user a "server busy" message and retry after a few seconds.
 
 ---
 

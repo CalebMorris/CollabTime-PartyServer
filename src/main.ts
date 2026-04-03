@@ -9,13 +9,35 @@ import { createHandlers } from './ws/handlers.js';
 import { broadcastToRoom } from './ws/broadcast.js';
 import { registry } from './ws/registry.js';
 import { startEventLoopMonitor, stopEventLoopMonitor, getEventLoopStats } from './metrics/eventloop.js';
+import { isAcceptingRooms } from './metrics/capacity.js';
 import WebSocket from 'ws';
 
 const config = loadConfig();
 initWordlist();
 startEventLoopMonitor();
 
+console.info(`[capacity] EVENT_LOOP_LAG_THRESHOLD_MS=${config.EVENT_LOOP_LAG_THRESHOLD_MS}ms`);
+
 let isShuttingDown = false;
+
+// Lightweight per-IP rate limiter for GET /capacity (10 requests per minute)
+const CAPACITY_RATE_LIMIT_MAX = 10;
+const CAPACITY_RATE_LIMIT_WINDOW_MS = 60_000;
+const capacityRequestCounts = new Map<string, { count: number; windowStartMs: number }>();
+
+const capacityRateLimiter = {
+  isAllowed(ip: string): boolean {
+    const now = Date.now();
+    const entry = capacityRequestCounts.get(ip);
+    if (!entry || now - entry.windowStartMs > CAPACITY_RATE_LIMIT_WINDOW_MS) {
+      capacityRequestCounts.set(ip, { count: 1, windowStartMs: now });
+      return true;
+    }
+    if (entry.count >= CAPACITY_RATE_LIMIT_MAX) return false;
+    entry.count++;
+    return true;
+  },
+};
 
 const fastify = Fastify({ logger: { level: config.LOG_LEVEL } });
 
@@ -43,7 +65,7 @@ const handlers = createHandlers(store, config, rateLimiter, {
   info: (msg, data) => fastify.log.info(data ?? {}, msg),
   warn: (msg, data) => fastify.log.warn(data ?? {}, msg),
   error: (msg, data) => fastify.log.error(data ?? {}, msg),
-});
+}, () => isAcceptingRooms(config.EVENT_LOOP_LAG_THRESHOLD_MS));
 
 // CORS
 await fastify.register(cors, {
@@ -56,6 +78,15 @@ await fastify.register(cors, {
 await fastify.register(websocket);
 
 fastify.get('/health', async () => ({ status: 'ok' }));
+
+fastify.get('/capacity', async (req, reply) => {
+  const ip = req.ip;
+  if (!capacityRateLimiter.isAllowed(ip)) {
+    return reply.code(429).send({ error: 'Too Many Requests' });
+  }
+  const accepting = isAcceptingRooms(config.EVENT_LOOP_LAG_THRESHOLD_MS);
+  return { accepting_rooms: accepting, reason: accepting ? null : 'HIGH_LOAD' };
+});
 
 fastify.get('/metrics', async () => ({ eventLoopLag: getEventLoopStats() }));
 
