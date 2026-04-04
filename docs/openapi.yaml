@@ -6,45 +6,7 @@ info:
   description: |
     REST API for the collab-time collaboration server.
 
-    ## WebSocket
-    Real-time collaboration is handled over a WebSocket connection at `GET /ws`.
-    OpenAPI 3.0 has no native WebSocket support, so the protocol is described here.
-
-    ### Connection
-    Upgrade `GET /ws` to a WebSocket connection. All messages are JSON-encoded text frames.
-
-    ### Client → Server messages
-
-    **join**
-    ```json
-    { "type": "join", "roomCode": "word-word-word", "protocolVersion": "1.0" }
-    ```
-    `roomCode` must match `/^[a-z]+-[a-z]+-[a-z]+$/`. `protocolVersion` is optional.
-
-    **rejoin**
-    ```json
-    { "type": "rejoin", "roomCode": "word-word-word", "sessionToken": "<32 hex chars>", "protocolVersion": "1.0" }
-    ```
-
-    **propose**
-    ```json
-    { "type": "propose", "epochMs": 1700000000000 }
-    ```
-    `epochMs` must be an integer in the range `[0, 9999999999999]`.
-
-    **leave**
-    ```json
-    { "type": "leave" }
-    ```
-
-    ### Server → Client messages
-    `joined`, `participant_joined`, `participant_left`, `participant_disconnected`,
-    `participant_reconnected`, `room_activated`, `room_deactivated`, `proposal_updated`,
-    `locked_in`, `room_expired`, `error`.
-
-    ### Error codes
-    `ROOM_NOT_FOUND`, `ROOM_NOT_ACTIVE`, `ROOM_FULL`, `RATE_LIMITED`,
-    `REJOIN_FAILED`, `INVALID_TOKEN`, `PROTOCOL_VERSION_MISMATCH`, `SERVER_AT_CAPACITY`.
+    Real-time collaboration is handled over a WebSocket connection — see `GET /ws`.
 
 servers:
   - url: http://localhost:3000
@@ -53,6 +15,44 @@ servers:
 security: []
 
 paths:
+  /ws:
+    get:
+      summary: WebSocket connection
+      description: |
+        Upgrade this HTTP GET to a WebSocket connection. All messages are JSON-encoded text frames.
+
+        **Client → Server:** send a `WsClientMessage` frame.
+        **Server → Client:** receive a `WsServerMessage` frame.
+      operationId: connectWebSocket
+      servers:
+        - url: ws://localhost:3000
+          description: Local development
+      parameters:
+        - name: Upgrade
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [websocket]
+        - name: Connection
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [Upgrade]
+      responses:
+        "101":
+          description: WebSocket connection established. All subsequent communication is via WebSocket frames.
+          headers:
+            Upgrade:
+              schema:
+                type: string
+                enum: [websocket]
+            Connection:
+              schema:
+                type: string
+                enum: [Upgrade]
+
   /health:
     get:
       summary: Health check
@@ -255,3 +255,290 @@ components:
             Event loop delay statistics. `null` when the monitor is not running.
           allOf:
             - $ref: "#/components/schemas/EventLoopStats"
+
+    # WebSocket shared types
+
+    WsParticipantSnapshot:
+      type: object
+      required: [participantToken, nickname, isConnected]
+      properties:
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        nickname:
+          type: string
+        isConnected:
+          type: boolean
+        proposalEpochMs:
+          type: integer
+          minimum: 0
+          maximum: 9999999999999
+          description: Present only when the participant has submitted a proposal.
+
+    WsRoomSnapshot:
+      type: object
+      required: [code, state, participants]
+      properties:
+        code:
+          type: string
+          pattern: "^[a-z]+-[a-z]+-[a-z]+$"
+        state:
+          type: string
+          enum: [waiting, active, locked_in]
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/WsParticipantSnapshot"
+        lockedInEpochMs:
+          type: integer
+          minimum: 0
+          maximum: 9999999999999
+          description: Present only when state is `locked_in`.
+
+    # WebSocket client → server messages
+
+    WsJoinMessage:
+      type: object
+      required: [type, roomCode]
+      properties:
+        type:
+          type: string
+          enum: [join]
+        roomCode:
+          type: string
+          pattern: "^[a-z]+-[a-z]+-[a-z]+$"
+        protocolVersion:
+          type: string
+          example: "1.0"
+
+    WsRejoinMessage:
+      type: object
+      required: [type, roomCode, sessionToken]
+      properties:
+        type:
+          type: string
+          enum: [rejoin]
+        roomCode:
+          type: string
+          pattern: "^[a-z]+-[a-z]+-[a-z]+$"
+        sessionToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        protocolVersion:
+          type: string
+          example: "1.0"
+
+    WsProposeMessage:
+      type: object
+      required: [type, epochMs]
+      properties:
+        type:
+          type: string
+          enum: [propose]
+        epochMs:
+          type: integer
+          minimum: 0
+          maximum: 9999999999999
+          description: Unix timestamp in milliseconds truncated to the minute for lock-in comparison.
+
+    WsLeaveMessage:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [leave]
+
+    WsClientMessage:
+      oneOf:
+        - $ref: "#/components/schemas/WsJoinMessage"
+        - $ref: "#/components/schemas/WsRejoinMessage"
+        - $ref: "#/components/schemas/WsProposeMessage"
+        - $ref: "#/components/schemas/WsLeaveMessage"
+      discriminator:
+        propertyName: type
+        mapping:
+          join: "#/components/schemas/WsJoinMessage"
+          rejoin: "#/components/schemas/WsRejoinMessage"
+          propose: "#/components/schemas/WsProposeMessage"
+          leave: "#/components/schemas/WsLeaveMessage"
+
+    # WebSocket server → client messages
+
+    WsJoinedMessage:
+      type: object
+      required: [type, sessionToken, participantToken, nickname, protocolVersion, room]
+      properties:
+        type:
+          type: string
+          enum: [joined]
+        sessionToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        nickname:
+          type: string
+        protocolVersion:
+          type: string
+          example: "1.0"
+        room:
+          $ref: "#/components/schemas/WsRoomSnapshot"
+
+    WsParticipantJoinedMessage:
+      type: object
+      required: [type, participantToken, nickname]
+      properties:
+        type:
+          type: string
+          enum: [participant_joined]
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        nickname:
+          type: string
+
+    WsParticipantLeftMessage:
+      type: object
+      required: [type, participantToken]
+      properties:
+        type:
+          type: string
+          enum: [participant_left]
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+
+    WsParticipantDisconnectedMessage:
+      type: object
+      required: [type, participantToken]
+      properties:
+        type:
+          type: string
+          enum: [participant_disconnected]
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+
+    WsParticipantReconnectedMessage:
+      type: object
+      required: [type, participantToken]
+      properties:
+        type:
+          type: string
+          enum: [participant_reconnected]
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+
+    WsRoomActivatedMessage:
+      type: object
+      required: [type, participants]
+      properties:
+        type:
+          type: string
+          enum: [room_activated]
+        participants:
+          type: array
+          items:
+            type: object
+            required: [participantToken, nickname]
+            properties:
+              participantToken:
+                type: string
+                pattern: "^[0-9a-f]{32}$"
+              nickname:
+                type: string
+
+    WsRoomDeactivatedMessage:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [room_deactivated]
+
+    WsProposalUpdatedMessage:
+      type: object
+      required: [type, participantToken, epochMs]
+      properties:
+        type:
+          type: string
+          enum: [proposal_updated]
+        participantToken:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        epochMs:
+          type: integer
+          minimum: 0
+          maximum: 9999999999999
+
+    WsLockedInMessage:
+      type: object
+      required: [type, epochMs]
+      properties:
+        type:
+          type: string
+          enum: [locked_in]
+        epochMs:
+          type: integer
+          minimum: 0
+          maximum: 9999999999999
+
+    WsRoomExpiredMessage:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [room_expired]
+
+    WsErrorMessage:
+      type: object
+      required: [type, code, message]
+      properties:
+        type:
+          type: string
+          enum: [error]
+        code:
+          type: string
+          enum:
+            - ROOM_NOT_FOUND
+            - ROOM_NOT_ACTIVE
+            - ROOM_FULL
+            - RATE_LIMITED
+            - REJOIN_FAILED
+            - INVALID_TOKEN
+            - PROTOCOL_VERSION_MISMATCH
+            - SERVER_AT_CAPACITY
+        message:
+          type: string
+
+    WsServerMessage:
+      oneOf:
+        - $ref: "#/components/schemas/WsJoinedMessage"
+        - $ref: "#/components/schemas/WsParticipantJoinedMessage"
+        - $ref: "#/components/schemas/WsParticipantLeftMessage"
+        - $ref: "#/components/schemas/WsParticipantDisconnectedMessage"
+        - $ref: "#/components/schemas/WsParticipantReconnectedMessage"
+        - $ref: "#/components/schemas/WsRoomActivatedMessage"
+        - $ref: "#/components/schemas/WsRoomDeactivatedMessage"
+        - $ref: "#/components/schemas/WsProposalUpdatedMessage"
+        - $ref: "#/components/schemas/WsLockedInMessage"
+        - $ref: "#/components/schemas/WsRoomExpiredMessage"
+        - $ref: "#/components/schemas/WsErrorMessage"
+      discriminator:
+        propertyName: type
+        mapping:
+          joined: "#/components/schemas/WsJoinedMessage"
+          participant_joined: "#/components/schemas/WsParticipantJoinedMessage"
+          participant_left: "#/components/schemas/WsParticipantLeftMessage"
+          participant_disconnected: "#/components/schemas/WsParticipantDisconnectedMessage"
+          participant_reconnected: "#/components/schemas/WsParticipantReconnectedMessage"
+          room_activated: "#/components/schemas/WsRoomActivatedMessage"
+          room_deactivated: "#/components/schemas/WsRoomDeactivatedMessage"
+          proposal_updated: "#/components/schemas/WsProposalUpdatedMessage"
+          locked_in: "#/components/schemas/WsLockedInMessage"
+          room_expired: "#/components/schemas/WsRoomExpiredMessage"
+          error: "#/components/schemas/WsErrorMessage"
